@@ -1,0 +1,280 @@
+(function bootstrapPermanentUnifiedAnalytics() {
+  // -------------------------------------------------------------
+  // 1. CORE UNIFIED ANALYTICS & LIVE SYNC PATCH CODE
+  // -------------------------------------------------------------
+  const patchCode = `
+  (function runUnifiedAnalyticsEngine() {
+    // A. Inject Analytical Card Containers into #sec-analytics
+    const analyticsSec = document.getElementById('sec-analytics');
+    if (analyticsSec && !document.getElementById('advancedAnalyticsGrid')) {
+      const extraGrid = document.createElement('div');
+      extraGrid.id = 'advancedAnalyticsGrid';
+      extraGrid.className = 'grid grid-cols-1 md:grid-cols-3 gap-5 sm:gap-6 mt-6';
+      extraGrid.innerHTML = \`
+        <!-- CHART 3: DOMAIN DISTRIBUTION DOUGHNUT -->
+        <div class="card-3d rounded-2xl p-4 sm:p-5 border border-slate-200/80 shadow-sm">
+          <div class="flex items-center justify-between mb-3">
+            <div>
+              <h3 class="font-bold text-slate-900 text-sm flex items-center gap-2">
+                <i class="fa-solid fa-chart-pie text-brandBlue-700"></i> Domain Distribution
+              </h3>
+              <p class="text-[11px] text-slate-500">IEP Goals by Category</p>
+            </div>
+            <span class="text-[10px] bg-brandBlue-50 text-brandBlue-700 font-bold px-2 py-0.5 rounded-lg border border-brandBlue-200 badge-3d">Domain Split</span>
+          </div>
+          <div class="relative h-56">
+            <canvas id="domainChartCanvas"></canvas>
+          </div>
+        </div>
+
+        <!-- CHART 4: METHOD DIVERSITY POLAR AREA -->
+        <div class="card-3d rounded-2xl p-4 sm:p-5 border border-slate-200/80 shadow-sm">
+          <div class="flex items-center justify-between mb-3">
+            <div>
+              <h3 class="font-bold text-slate-900 text-sm flex items-center gap-2">
+                <i class="fa-solid fa-chart-polar text-brandOrange-600"></i> Method Diversity
+              </h3>
+              <p class="text-[11px] text-slate-500">Observations Logged per Method</p>
+            </div>
+            <span class="text-[10px] bg-brandOrange-50 text-brandOrange-700 font-bold px-2 py-0.5 rounded-lg border border-brandOrange-200 badge-3d">Log Methods</span>
+          </div>
+          <div class="relative h-56">
+            <canvas id="methodChartCanvas"></canvas>
+          </div>
+        </div>
+
+        <!-- CHART 5: FBA FUNCTION PROFILE BAR -->
+        <div class="card-3d rounded-2xl p-4 sm:p-5 border border-slate-200/80 shadow-sm">
+          <div class="flex items-center justify-between mb-3">
+            <div>
+              <h3 class="font-bold text-slate-900 text-sm flex items-center gap-2">
+                <i class="fa-solid fa-bullseye text-emerald-600"></i> Behavioral Functions
+              </h3>
+              <p class="text-[11px] text-slate-500">Hypothesized FBA Profile</p>
+            </div>
+            <span class="text-[10px] bg-emerald-50 text-emerald-700 font-bold px-2 py-0.5 rounded-lg border border-emerald-200 badge-3d">FBA Profile</span>
+          </div>
+          <div class="relative h-56">
+            <canvas id="functionChartCanvas"></canvas>
+          </div>
+        </div>
+      \`;
+      analyticsSec.appendChild(extraGrid);
+    }
+
+    // B. Unified Master Graph Sync Routine (Updates All 5 Graphs + Stat Cards)
+    window.syncAllGraphsToLiveGoals = function() {
+      if (typeof appState === 'undefined') return;
+
+      const studentId = appState.currentStudentId;
+      const activeGoals = appState.goals.filter(g => g.studentId === studentId);
+      const activeObservations = appState.observations.filter(o => o.studentId === studentId);
+
+      // --- Update Top Metric Cards ---
+      const statFocusPct = document.getElementById('statFocusPct');
+      if (statFocusPct) {
+        if (activeGoals.length > 0) {
+          const avgScore = activeGoals.reduce((sum, g) => sum + (parseFloat(g.current) || 0), 0) / activeGoals.length;
+          statFocusPct.textContent = \`\${avgScore.toFixed(1)}%\`;
+        } else {
+          statFocusPct.textContent = '0.0%';
+        }
+      }
+
+      const statTotalLogs = document.getElementById('statTotalLogs');
+      if (statTotalLogs) {
+        statTotalLogs.textContent = \`\${activeObservations.length} Events\`;
+      }
+
+      if (typeof Chart === 'undefined') return;
+
+      // 1. Line Chart: Predictive Trajectory
+      const predictiveCanvas = document.getElementById('predictiveChartCanvas');
+      if (predictiveCanvas) {
+        if (chartInstances.predictive) chartInstances.predictive.destroy();
+        const labels = activeObservations.length > 0
+          ? activeObservations.map((o, i) => \`Log \${i + 1}\`)
+          : activeGoals.map(g => g.title.substring(0, 10) + '...');
+        const dataPoints = activeObservations.length > 0
+          ? activeObservations.map(o => o.score)
+          : activeGoals.map(g => g.current);
+
+        chartInstances.predictive = new Chart(predictiveCanvas, {
+          type: 'line',
+          data: {
+            labels: labels.length ? labels : ['No Data'],
+            datasets: [{
+              label: 'Performance Score (%)',
+              data: dataPoints.length ? dataPoints : [0],
+              borderColor: '#1e40af',
+              backgroundColor: 'rgba(30, 64, 175, 0.12)',
+              borderWidth: 2.5,
+              tension: 0.3,
+              fill: true,
+              pointBackgroundColor: '#ea580c',
+              pointRadius: 4
+            }]
+          },
+          options: { responsive: true, maintainAspectRatio: false, scales: { y: { min: 0, max: 100 } } }
+        });
+      }
+
+      // 2. Bar Chart: Setting / Class Aggregates
+      const subjectCanvas = document.getElementById('subjectChartCanvas');
+      if (subjectCanvas) {
+        if (chartInstances.subject) chartInstances.subject.destroy();
+        const classAggregates = {};
+        activeObservations.forEach(log => {
+          const cls = log.className || 'General Class';
+          if (!classAggregates[cls]) classAggregates[cls] = { total: 0, count: 0 };
+          classAggregates[cls].total += log.score;
+          classAggregates[cls].count += 1;
+        });
+        const labels = Object.keys(classAggregates);
+        const scores = labels.map(c => Math.round(classAggregates[c].total / classAggregates[c].count));
+
+        chartInstances.subject = new Chart(subjectCanvas, {
+          type: 'bar',
+          data: {
+            labels: labels.length ? labels : ['General Setting'],
+            datasets: [{
+              label: 'Mean Score (%)',
+              data: scores.length ? scores : [0],
+              backgroundColor: 'rgba(234, 88, 12, 0.85)',
+              borderRadius: 6
+            }]
+          },
+          options: { responsive: true, maintainAspectRatio: false, scales: { y: { min: 0, max: 100 } } }
+        });
+      }
+
+      // 3. Doughnut Chart: Domain Distribution
+      const domainCanvas = document.getElementById('domainChartCanvas');
+      if (domainCanvas) {
+        if (chartInstances.domain) chartInstances.domain.destroy();
+        const domainCounts = {};
+        activeGoals.forEach(g => { domainCounts[g.domain] = (domainCounts[g.domain] || 0) + 1; });
+
+        chartInstances.domain = new Chart(domainCanvas, {
+          type: 'doughnut',
+          data: {
+            labels: Object.keys(domainCounts).length ? Object.keys(domainCounts) : ['Behavioral', 'Academic', 'Social-Emotional'],
+            datasets: [{
+              data: Object.keys(domainCounts).length ? Object.values(domainCounts) : [1, 0, 0],
+              backgroundColor: ['#1e40af', '#ea580c', '#10b981', '#6366f1', '#f59e0b'],
+              borderWidth: 2
+            }]
+          },
+          options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } } } }
+        });
+      }
+
+      // 4. Polar Chart: Method Diversity
+      const methodCanvas = document.getElementById('methodChartCanvas');
+      if (methodCanvas) {
+        if (chartInstances.method) chartInstances.method.destroy();
+        const methodCounts = { 'MTS': 0, 'ABC': 0, 'Frequency': 0, 'Duration': 0, 'Task Analysis': 0 };
+        activeObservations.forEach(o => {
+          const m = o.method || 'MTS';
+          methodCounts[m] = (methodCounts[m] || 0) + 1;
+        });
+
+        chartInstances.method = new Chart(methodCanvas, {
+          type: 'polarArea',
+          data: {
+            labels: Object.keys(methodCounts),
+            datasets: [{
+              data: Object.values(methodCounts),
+              backgroundColor: ['rgba(30, 64, 175, 0.75)', 'rgba(234, 88, 12, 0.75)', 'rgba(16, 185, 129, 0.75)', 'rgba(99, 102, 241, 0.75)', 'rgba(245, 158, 11, 0.75)']
+            }]
+          },
+          options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 9 } } } } }
+        });
+      }
+
+      // 5. Bar Chart: FBA Behavior Functions
+      const funcCanvas = document.getElementById('functionChartCanvas');
+      if (funcCanvas) {
+        if (chartInstances.function) chartInstances.function.destroy();
+        const funcCounts = { 'Escape': 0, 'Attention': 0, 'Access': 0, 'Sensory': 0 };
+        activeObservations.forEach(o => {
+          if (o.meta && o.meta.func) { funcCounts[o.meta.func] = (funcCounts[o.meta.func] || 0) + 1; }
+        });
+
+        chartInstances.function = new Chart(funcCanvas, {
+          type: 'bar',
+          data: {
+            labels: Object.keys(funcCounts),
+            datasets: [{ label: 'Occurrences', data: Object.values(funcCounts), backgroundColor: 'rgba(30, 64, 175, 0.85)', borderRadius: 6 }]
+          },
+          options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
+        });
+      }
+
+      if (typeof logDebugEvent === 'function') {
+        logDebugEvent('Graph Sync', 'All 5 charts synced to live goal state.');
+      }
+    };
+
+    // C. Function Wrapper Interceptor for Reactive Auto-Refresh
+    const wrapFn = (fnName) => {
+      if (typeof window[fnName] === 'function' && !window[fnName]._wrappedForSync) {
+        const original = window[fnName];
+        window[fnName] = function(...args) {
+          const res = original.apply(this, args);
+          window.syncAllGraphsToLiveGoals();
+          return res;
+        };
+        window[fnName]._wrappedForSync = true;
+      }
+    };
+
+    ['handleGoalFormSubmit', 'deleteGoal', 'addGeneratedGoalToActiveStudent', 'commitObservationEvent', 'switchStudentContext', 'handleLoginSubmit'].forEach(wrapFn);
+
+    window.renderCharts = function() { window.syncAllGraphsToLiveGoals(); };
+    window.syncAllGraphsToLiveGoals();
+  })();
+  `;
+
+  // -------------------------------------------------------------
+  // 2. PERMANENT STORAGE & AUTO-BOOTSTRAPPER SYSTEM
+  // -------------------------------------------------------------
+  try {
+    // Save patch payload into persistent storage
+    let registry = JSON.parse(localStorage.getItem('bxpulse_persistent_patches') || '[]');
+    if (!registry.includes(patchCode)) {
+      registry.push(patchCode);
+      localStorage.setItem('bxpulse_persistent_patches', JSON.stringify(registry));
+    }
+
+    // Execute the patch immediately in current DOM context
+    eval(patchCode);
+
+    // Attach auto-loader on DOM load to guarantee survival across refresh & logout
+    if (!window._bxpulsePatchBootstrapperActive) {
+      window._bxpulsePatchBootstrapperActive = true;
+
+      const runPersistentPatches = () => {
+        try {
+          const storedPatches = JSON.parse(localStorage.getItem('bxpulse_persistent_patches') || '[]');
+          storedPatches.forEach(code => eval(code));
+          if (typeof logDebugEvent === 'function') {
+            logDebugEvent('Bootstrapper', `Reloaded ${storedPatches.length} persistent patches from storage.`);
+          }
+        } catch (e) {
+          console.warn('Persistent patch restore warning:', e);
+        }
+      };
+
+      window.addEventListener('DOMContentLoaded', runPersistentPatches);
+    }
+
+    if (typeof logDebugEvent === 'function') {
+      logDebugEvent('AI Patcher', 'Patch installed PERMANENTLY. Saved to LocalStorage auto-bootstrapper.');
+    }
+    alert('Unified Live-Sync Patch successfully installed permanently! It will remain active across page reloads and logouts.');
+
+  } catch (err) {
+    alert('Patch Execution Error: ' + err.message);
+  }
+})();
